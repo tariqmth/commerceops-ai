@@ -99,5 +99,44 @@ def test_ai_api_returns_502_when_ollama_returns_an_error(
 
     assert response.status_code == 502
     assert response.json()["detail"] == (
-        "The AI service returned an error."
+        "The AI "
+        "service returned an error."
     )
+
+
+def test_ai_endpoint_does_not_expose_runtime_error_details(monkeypatch):
+    def fake_ask(question):
+        raise RuntimeError(
+            "Sensitive internal detail: http://internal-erp:8002"
+        )
+
+    monkeypatch.setattr(main, "ask_commerceops", fake_ask)
+
+    response = client.post(
+        "/ai/ask",
+        json={"question": "Compare stock"},
+    )
+
+    assert response.status_code == 502
+    assert "internal-erp" not in response.text
+    assert "Sensitive internal detail" not in response.text
+
+
+def test_ai_endpoint_returns_504_when_request_times_out(monkeypatch):
+    import httpx
+
+    def fake_ask(question):
+        raise httpx.TimeoutException("Internal timeout details")
+
+    monkeypatch.setattr(main, "ask_commerceops", fake_ask)
+
+    response = client.post(
+        "/ai/ask",
+        json={"question": "Compare stock"},
+    )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == (
+        "The AI request timed out. Please try again."
+    )
+    assert "Internal timeout details" not in response.text

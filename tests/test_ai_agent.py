@@ -7,6 +7,15 @@ import pytest
 import ai_agent
 
 
+@pytest.fixture(autouse=True)
+def mock_semantic_retrieval(monkeypatch):
+    monkeypatch.setattr(
+        ai_agent,
+        "retrieve_runbooks_semantic",
+        lambda question, top_k=3: [],
+    )
+
+
 def make_response(content="", tool_calls=None):
     """Build a fake Ollama response for testing."""
     message = SimpleNamespace(
@@ -220,4 +229,3 @@ def test_agent_rejects_multiple_tool_calls(monkeypatch):
 
     mock_tool.assert_not_called()
     assert mock_client.chat.call_count == 1
-

@@ -9,6 +9,7 @@ from ai_agent import ask_commerceops
 from schemas import AIQuestionRequest
 import ollama
 import httpx
+from integrations.inventory_service import get_inventory_comparison
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,35 +32,55 @@ def health_check():
     }
 
 
-@app.get(
-    "/inventory/discrepancies",
-    response_model=list[InventoryDiscrepancy],
-)
+@app.get("/inventory/discrepancies")
 def inventory_discrepancies():
-    return compare_inventory()
+    try:
+        results = get_inventory_comparison()
+    except RuntimeError as exc:
+        logger.warning("Inventory integration failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Inventory systems are temporarily unavailable.",
+        ) from exc
+    except ValueError as exc:
+        logger.warning("Inventory integration returned invalid data: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Inventory systems returned invalid data.",
+        ) from exc
+
+    return [
+        item for item in results
+        if item["status"] != "matched"
+    ]
 
 
 @app.get("/inventory/summary")
 def inventory_summary():
-    results = compare_inventory()
-
-    matched = sum(
-        1 for item in results if item["status"] == "matched"
-    )
-    discrepancies = sum(
-        1 for item in results if item["status"] == "discrepancy"
-    )
-    missing = sum(
-        1 for item in results if item["status"] == "missing_from_system"
-    )
+    try:
+        results = get_inventory_comparison()
+    except RuntimeError as exc:
+        logger.warning("Inventory integration failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Inventory systems are temporarily unavailable.",
+        ) from exc
+    except ValueError as exc:
+        logger.warning("Inventory integration returned invalid data: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="Inventory systems returned invalid data.",
+        ) from exc
 
     return {
         "total_skus": len(results),
-        "matched": matched,
-        "discrepancies": discrepancies,
-        "missing_from_system": missing,
+        "discrepancy_count": sum(
+            item["status"] != "matched" for item in results
+        ),
+        "matched_count": sum(
+            item["status"] == "matched" for item in results
+        ),
     }
-
 
 @app.post("/inventory/compare")
 def compare_inventory_request(request: InventoryComparisonRequest):
@@ -150,6 +171,5 @@ def ask_ai(request: AIQuestionRequest):
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
-            detail="The AI service took too long to respond. Please try again.",
+            detail="The AI request timed out. Please try again.",
         ) from exc
-

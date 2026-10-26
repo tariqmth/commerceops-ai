@@ -1,17 +1,17 @@
 
-from inventory import compare_inventory
+from integrations.inventory_service import get_inventory_comparison
 
 
 def get_inventory_discrepancies() -> dict:
     """
-    Read-only tool that compares online store inventory
-    against ERP inventory.
+    Read-only tool that compares online-store inventory
+    against ERP inventory using their HTTP APIs.
     """
-    results = compare_inventory()
+
+    results = get_inventory_comparison()
 
     discrepancies = [
-        item
-        for item in results
+        item for item in results
         if item["status"] != "matched"
     ]
 

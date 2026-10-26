@@ -1,6 +1,7 @@
 
 from fastapi.testclient import TestClient
 
+import main
 from main import app
 
 client = TestClient(app)
@@ -13,13 +14,18 @@ def test_health_endpoint():
     assert response.json()["status"] == "ok"
 
 
-def test_inventory_summary_endpoint():
+def test_inventory_summary_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "get_inventory_comparison",
+        main.compare_inventory,
+    )
+
     response = client.get("/inventory/summary")
 
     assert response.status_code == 200
     assert response.json() == {
         "total_skus": 3,
-        "matched": 1,
-        "discrepancies": 2,
-        "missing_from_system": 0,
+        "discrepancy_count": 2,
+        "matched_count": 1,
     }
