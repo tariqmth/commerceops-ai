@@ -1,7 +1,6 @@
 
 import json
 import logging
-from pyexpat.errors import messages
 import ollama
 import httpx
 import time
@@ -30,29 +29,49 @@ TOOLS = [
 ]
 
 
+def is_inventory_question(question: str) -> bool:
+    """Identify questions that need actual inventory data."""
+    text = question.lower()
+
+    operational_terms = {
+        "troubleshoot",
+        "troubleshooting",
+        "timeout",
+        "timeouts",
+        "api failure",
+        "api failures",
+        "service failure",
+        "service failures",
+        "retry",
+        "retries",
+        "http status",
+        "logs",
+        "runbook",
+    }
+
+    # Operational troubleshooting can mention inventory without
+    # necessarily asking for actual stock data.
+    if any(term in text for term in operational_terms):
+        return False
+
+    inventory_terms = {
+        "inventory",
+        "stock",
+        "sku",
+        "quantity",
+        "quantities",
+        "discrepancy",
+        "discrepancies",
+        "compare",
+        "comparison",
+    }
+
+    words = set(text.replace("-", " ").split())
+    return bool(words & inventory_terms)
+
+
 def ask_commerceops(question: str) -> str:
     logger.info("Starting CommerceOps AI request")
-
-    runbooks = retrieve_runbooks_semantic(
-        question,
-        top_k=3,
-    )
-
-    if runbooks:
-        runbook_context = "\n\n".join(
-            (
-                f"Source: {item['source']}\n"
-                f"Section: {item['section']}\n"
-                f"Content:\n{item['content']}"
-            )
-            for item in runbooks
-        )
-    else:
-        runbook_context = (
-            "No relevant runbook sections were found. "
-            "Do not invent company procedures."
-        )
-
 
     retrieval_started = time.perf_counter()
 
@@ -72,6 +91,30 @@ def ask_commerceops(question: str) -> str:
         retrieval_duration * 1000,
         len(runbooks),
     )
+
+    for rank, item in enumerate(runbooks, start=1):
+        logger.info(
+            "Retrieved runbook: rank=%d source=%s section=%s score=%.4f",
+            rank,
+            item["source"],
+            item["section"],
+            item["score"],
+        )
+
+    if runbooks:
+        runbook_context = "\n\n".join(
+            (
+                f"Source: {item['source']}\n"
+                f"Section: {item['section']}\n"
+                f"Content:\n{item['content']}"
+            )
+            for item in runbooks
+        )
+    else:
+        runbook_context = (
+            "No relevant runbook sections were found. "
+            "Do not invent company procedures."
+        )
 
     for rank, item in enumerate(runbooks, start=1):
         logger.info(
@@ -112,6 +155,15 @@ def ask_commerceops(question: str) -> str:
 
     client = ollama.Client(timeout=60.0)
 
+    if not runbooks and not is_inventory_question(question):
+        logger.warning(
+            "Refusing operational question because no runbook evidence was retrieved"
+        )
+        raise RuntimeError(
+            "No relevant runbook evidence was found. "
+            "Cannot answer this operational question safely."
+        )
+
     response = client.chat(
         model="qwen3:4b",
         messages=messages,
@@ -124,13 +176,19 @@ def ask_commerceops(question: str) -> str:
     tool_calls = response.message.tool_calls or []
 
     if not tool_calls:
-        logger.warning(
-            "AI did not request the inventory tool; refusing to answer"
+        if is_inventory_question(question):
+            logger.warning(
+                "Inventory question received without tool evidence"
+            )
+            raise RuntimeError(
+                "The model did not request the inventory tool. "
+                "Cannot answer without inventory evidence."
+            )
+
+        logger.info(
+            "No tool call requested for a non-inventory question"
         )
-        raise RuntimeError(
-            "The model did not request the inventory tool. "
-            "Cannot answer without inventory evidence."
-        )
+        return response.message.content or ""
 
     if len(tool_calls) != 1:
         logger.warning(

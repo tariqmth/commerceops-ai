@@ -2,7 +2,9 @@
 # Inventory Integration Failure
 
 ## Purpose
-Investigate unavailable or failing inventory APIs.
+Investigate unavailable or failing inventory APIs, external API
+connections, connection errors, network connectivity failures,
+and upstream service communication problems.
 
 ## Initial checks
 1. Check the affected service health endpoint.

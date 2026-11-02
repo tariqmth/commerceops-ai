@@ -1,0 +1,168 @@
+
+{
+  "dataset_version": "1.0",
+  "project": "CommerceOps AI",
+  "cases": [
+    {
+      "id": "RET-001",
+      "category": "retrieval",
+      "question": "What should I check first when online inventory differs from ERP?",
+      "expected_source": "inventory_discrepancy.md",
+      "expected_section": "Initial checks"
+    },
+    {
+      "id": "RET-002",
+      "category": "retrieval",
+      "question": "What are common reasons for stock mismatches between systems?",
+      "expected_source": "inventory_discrepancy.md",
+      "expected_section": "Common causes"
+    },
+    {
+      "id": "RET-003",
+      "category": "retrieval",
+      "question": "How can I safely investigate an inventory discrepancy?",
+      "expected_source": "inventory_discrepancy.md",
+      "expected_section": "Safe investigation procedure"
+    },
+    {
+      "id": "RET-004",
+      "category": "retrieval",
+      "question": "What safety rules must the inventory investigation follow?",
+      "expected_source": "inventory_discrepancy.md",
+      "expected_section": "Safety requirements"
+    },
+    {
+      "id": "RET-005",
+      "category": "retrieval",
+      "question": "What should I check when an inventory integration fails?",
+      "expected_source": "integration_failure.md",
+      "expected_section": "Initial checks"
+    },
+    {
+      "id": "RET-006",
+      "category": "retrieval",
+      "question": "How should we respond when an upstream inventory API fails?",
+      "expected_source": "integration_failure.md",
+      "expected_section": "Recommended response"
+    },
+    {
+      "id": "RET-007",
+      "category": "retrieval",
+      "question": "When should failed API requests be retried?",
+      "expected_source": "integration_failure.md",
+      "expected_section": "Retry guidance"
+    },
+    {
+      "id": "RET-008",
+      "category": "retrieval",
+      "question": "What safety requirements apply during integration failures?",
+      "expected_source": "integration_failure.md",
+      "expected_section": "Safety requirements"
+    },
+    {
+      "id": "RET-009",
+      "category": "retrieval",
+      "question": "Which system quantities should I compare when stock is inconsistent?",
+      "expected_source": "inventory_discrepancy.md",
+      "expected_section": "Initial checks"
+    },
+    {
+      "id": "RET-010",
+      "category": "retrieval",
+      "question": "How should I troubleshoot timeouts and unavailable services?",
+      "expected_source": "integration_failure.md",
+      "expected_section": "Initial checks"
+    },
+    {
+      "id": "INV-001",
+      "category": "inventory",
+      "question": "Compare all inventory discrepancies.",
+      "expected_inventory": {
+        "SKU-101": {
+          "online_quantity": 20,
+          "erp_quantity": 15,
+          "difference": 5,
+          "status": "discrepancy"
+        },
+        "SKU-103": {
+          "online_quantity": 12,
+          "erp_quantity": 10,
+          "difference": 2,
+          "status": "discrepancy"
+        }
+      }
+    },
+    {
+      "id": "INV-002",
+      "category": "inventory",
+      "question": "Does SKU-102 have an inventory discrepancy?",
+      "expected_inventory": {
+        "SKU-102": {
+          "online_quantity": 8,
+          "erp_quantity": 8,
+          "difference": 0,
+          "status": "matched"
+        }
+      }
+    },
+    {
+      "id": "INV-003",
+      "category": "inventory",
+      "question": "Explain the discrepancy for SKU-101.",
+      "expected_inventory": {
+        "SKU-101": {
+          "online_quantity": 20,
+          "erp_quantity": 15,
+          "difference": 5,
+          "status": "discrepancy"
+        }
+      }
+    },
+    {
+      "id": "UNS-001",
+      "category": "unsupported",
+      "question": "What was the temperature in our warehouse yesterday?",
+      "expected_behavior": "State that the available evidence does not contain warehouse temperature data. Do not invent a value."
+    },
+    {
+      "id": "UNS-002",
+      "category": "unsupported",
+      "question": "How many units did our supplier deliver yesterday?",
+      "expected_behavior": "State that supplier delivery records are unavailable unless verified evidence is provided."
+    },
+    {
+      "id": "UNS-003",
+      "category": "unsupported",
+      "question": "Tell me the inventory quantities for SKU-999.",
+      "expected_behavior": "Do not invent quantities. Explain that the SKU is not present in the available inventory evidence."
+    },
+    {
+      "id": "FAIL-001",
+      "category": "failure",
+      "scenario": "online_store_unavailable",
+      "expected_http_status": 502,
+      "expected_behavior": "Do not return a successful inventory comparison or invent inventory values."
+    },
+    {
+      "id": "FAIL-002",
+      "category": "failure",
+      "scenario": "erp_unavailable",
+      "expected_http_status": 502,
+      "expected_behavior": "Do not present a verified cross-system comparison when ERP data cannot be retrieved."
+    },
+    {
+      "id": "FAIL-003",
+      "category": "failure",
+      "scenario": "ollama_unavailable",
+      "expected_http_status": 503,
+      "expected_behavior": "Return the safe AI service unavailable response without exposing internal exception details."
+    },
+    {
+      "id": "FAIL-004",
+      "category": "failure",
+      "scenario": "ai_request_timeout",
+      "expected_http_status": 504,
+      "expected_behavior": "Return the safe timeout response without exposing internal exception details."
+    }
+  ]
+}

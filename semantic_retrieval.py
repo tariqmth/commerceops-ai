@@ -3,7 +3,7 @@ from pathlib import Path
 import math
 import re
 from functools import lru_cache
-
+from retrieval import tokenize
 import ollama
 
 
@@ -19,14 +19,23 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"\b[a-z0-9]+\b", text.lower()))
 
 
-def _split_sections(content: str) -> list[str]:
-    sections = re.split(r"(?m)(?=^##? )", content)
 
-    return [
-        section.strip()
-        for section in sections
-        if section.strip()
-    ]
+def _split_sections(content: str) -> list[str]:
+    """Return only second-level Markdown sections."""
+
+    sections = re.split(r"(?m)(?=^## )", content)
+    valid_sections = []
+
+    for section in sections:
+        section = section.strip()
+
+        # Ignore the document title and content before the first ## heading.
+        if not section.startswith("## "):
+            continue
+
+        valid_sections.append(section)
+
+    return valid_sections
 
 
 @lru_cache(maxsize=512)
@@ -95,19 +104,37 @@ def retrieve_runbooks_semantic(
 
     # Fail clearly if the local embedding service is unavailable.
     query_embedding = _embed_text(question)
+    query_words = tokenize(question)
     results = []
 
     for document in documents:
         document_embedding = _embed_text(document["content"])
-
-        score = _cosine_similarity(
+        semantic_score = _cosine_similarity(
             query_embedding,
             document_embedding,
         )
 
+        # Give extra weight to terms that match the section heading.
+        heading = document["section"]
+        heading_words = tokenize(heading)
+
+        # Compare query terms with the section content.
+        content_words = tokenize(document["content"])
+
+        heading_matches = len(query_words & heading_words)
+        content_matches = len(query_words & content_words)
+
+        # Combine semantic similarity with lexical evidence.
+        hybrid_score = (
+            semantic_score
+            + (0.12 * heading_matches)
+            + (0.015 * content_matches)
+        )
+
         results.append({
             **document,
-            "score": score,
+            "score": hybrid_score,
+            "semantic_score": semantic_score,
         })
 
     results.sort(

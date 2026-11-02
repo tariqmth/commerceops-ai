@@ -229,3 +229,86 @@ def test_agent_rejects_multiple_tool_calls(monkeypatch):
 
     mock_tool.assert_not_called()
     assert mock_client.chat.call_count == 1
+
+
+
+def test_agent_answers_runbook_question_without_inventory_tool(monkeypatch):
+    # Arrange: provide relevant runbook evidence.
+    monkeypatch.setattr(
+        ai_agent,
+        "retrieve_runbooks_semantic",
+        lambda question, top_k=3: [
+            {
+                "source": "integration_failure.md",
+                "section": "Initial checks",
+                "content": (
+                    "Check the affected service health endpoint. "
+                    "Record the HTTP status code and timestamp. "
+                    "Inspect application logs for the failed request."
+                ),
+                "score": 0.9,
+            }
+        ],
+    )
+
+    first_response = make_response(
+        content="Check the service health endpoint and inspect logs."
+    )
+
+    mock_client = Mock()
+    mock_client.chat.return_value = first_response
+
+    monkeypatch.setattr(
+        ai_agent.ollama,
+        "Client",
+        Mock(return_value=mock_client),
+    )
+
+    mock_tool = Mock()
+    monkeypatch.setattr(
+        ai_agent,
+        "get_inventory_discrepancies",
+        mock_tool,
+    )
+
+    # Act: ask an operational question, not a stock question.
+    answer = ai_agent.ask_commerceops(
+        "How should I troubleshoot an inventory API failure?"
+    )
+
+    # Assert: answer without invoking the inventory tool.
+    assert "health endpoint" in answer.lower()
+    mock_tool.assert_not_called()
+    mock_client.chat.assert_called_once()
+
+def test_agent_refuses_runbook_question_when_no_evidence_found(monkeypatch):
+    monkeypatch.setattr(
+        ai_agent,
+        "retrieve_runbooks_semantic",
+        lambda question, top_k=3: [],
+    )
+
+    mock_client = Mock()
+    monkeypatch.setattr(
+        ai_agent.ollama,
+        "Client",
+        Mock(return_value=mock_client),
+    )
+
+    mock_tool = Mock()
+    monkeypatch.setattr(
+        ai_agent,
+        "get_inventory_discrepancies",
+        mock_tool,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="No relevant runbook evidence",
+    ):
+        ai_agent.ask_commerceops(
+            "How should I troubleshoot an API timeout?"
+        )
+
+    mock_tool.assert_not_called()
+    mock_client.chat.assert_not_called()
