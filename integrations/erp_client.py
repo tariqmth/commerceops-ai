@@ -1,4 +1,6 @@
 
+"""Client for retrieving and validating inventory from the ERP service."""
+
 from integrations.online_store_client import (
     fetch_online_inventory,
     validate_inventory_payload,
@@ -14,21 +16,10 @@ def fetch_erp_inventory(
     # The ERP can later have its own field mapping if needed.
     import httpx
 
-    try:
-        response = httpx.get(
-            f"{base_url.rstrip('/')}/inventory",
-            timeout=5.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-
-    except httpx.TimeoutException as exc:
-        raise RuntimeError("ERP service timed out") from exc
-
-    except httpx.HTTPError as exc:
-        raise RuntimeError("ERP service request failed") from exc
-
-    except ValueError as exc:
-        raise RuntimeError("ERP returned invalid JSON") from exc
+    from integrations.http_utils import get_json_with_retries
+    payload = get_json_with_retries(
+    f"{base_url.rstrip('/')}/inventory",
+    "ERP",
+)
 
     return validate_inventory_payload(payload)

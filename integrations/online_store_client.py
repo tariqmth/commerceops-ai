@@ -1,34 +1,17 @@
 
-import httpx
+"""Client for retrieving and validating online-store inventory."""
 
+import httpx
+from integrations.http_utils import get_json_with_retries
 
 def fetch_online_inventory(
-    base_url: str = "http://127.0.0.1:8001",
-) -> dict:
+    base_url: str = "http://127.0.0.1:8001",) -> dict:
     """Fetch and validate inventory from the mock online store."""
 
-    try:
-        response = httpx.get(
-            f"{base_url.rstrip('/')}/inventory",
-            timeout=5.0,
-        )
-        response.raise_for_status()
-        payload = response.json()
-
-    except httpx.TimeoutException as exc:
-        raise RuntimeError(
-            "Online store service timed out"
-        ) from exc
-
-    except httpx.HTTPError as exc:
-        raise RuntimeError(
-            "Online store service request failed"
-        ) from exc
-
-    except ValueError as exc:
-        raise RuntimeError(
-            "Online store returned invalid JSON"
-        ) from exc
+    payload = get_json_with_retries(
+        f"{base_url.rstrip('/')}/inventory",
+        "Online store",
+    )
 
     return validate_inventory_payload(payload)
 

@@ -1,4 +1,6 @@
 
+"""FastAPI application exposing inventory, AI, and health endpoints."""
+
 import logging
 from fastapi import FastAPI
 from fastapi import HTTPException
@@ -10,11 +12,27 @@ from schemas import AIQuestionRequest
 import ollama
 import httpx
 from integrations.inventory_service import get_inventory_comparison
+from integrations.health_service import get_integrations_health
+import uuid
+
+from fastapi import Request
+from integrations.request_context import (
+    request_id_var,
+    RequestIdFilter,
+)
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    format=(
+        "%(asctime)s %(levelname)s "
+        "[request_id=%(request_id)s] "
+        "%(name)s: %(message)s"
+    ),
 )
+
+for handler in logging.getLogger().handlers:
+    handler.addFilter(RequestIdFilter())
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -22,6 +40,37 @@ app = FastAPI(
     description="Retail operations and integration assistant",
     version="0.3.0",
 )
+
+
+@app.middleware("http")
+async def request_tracking_middleware(request: Request, call_next):
+    request_id = uuid.uuid4().hex
+    token = request_id_var.set(request_id)
+
+    try:
+        response = await call_next(request)
+
+        response.headers["X-Request-ID"] = request_id
+
+        logger.info(
+            "HTTP request completed method=%s path=%s status_code=%s",
+            request.method,
+            request.url.path,
+            response.status_code,
+        )
+
+        return response
+
+    except Exception:
+        logger.exception(
+            "HTTP request failed method=%s path=%s",
+            request.method,
+            request.url.path,
+        )
+        raise
+
+    finally:
+        request_id_var.reset(token)
 
 
 @app.get("/health")
@@ -173,3 +222,7 @@ def ask_ai(request: AIQuestionRequest):
             status_code=504,
             detail="The AI request timed out. Please try again.",
         ) from exc
+
+@app.get("/health/integrations")
+def integrations_health():
+    return get_integrations_health()
