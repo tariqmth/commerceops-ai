@@ -4,6 +4,7 @@
 from fastapi import FastAPI
 import logging
 import uuid
+import time
 
 from fastapi import FastAPI, Request
 from integrations.request_context import request_id_var

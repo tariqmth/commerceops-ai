@@ -14,24 +14,17 @@ import httpx
 from integrations.inventory_service import get_inventory_comparison
 from integrations.health_service import get_integrations_health
 import uuid
+import time
 
 from fastapi import Request
 from integrations.request_context import (
     request_id_var,
-    RequestIdFilter,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format=(
-        "%(asctime)s %(levelname)s "
-        "[request_id=%(request_id)s] "
-        "%(name)s: %(message)s"
-    ),
-)
+from integrations.logging_config import configure_logging
+from integrations.metrics import metrics
 
-for handler in logging.getLogger().handlers:
-    handler.addFilter(RequestIdFilter())
+configure_logging("commerceops-ai")
 
 logger = logging.getLogger(__name__)
 
@@ -46,26 +39,44 @@ app = FastAPI(
 async def request_tracking_middleware(request: Request, call_next):
     request_id = uuid.uuid4().hex
     token = request_id_var.set(request_id)
+    start_time = time.perf_counter()
 
     try:
         response = await call_next(request)
-
+        duration_ms = round(
+            (time.perf_counter() - start_time) * 1000,
+            2,
+        )
+        metrics.record_request(
+            status_code=response.status_code,
+            duration_ms=duration_ms,
+        )
         response.headers["X-Request-ID"] = request_id
 
         logger.info(
-            "HTTP request completed method=%s path=%s status_code=%s",
-            request.method,
-            request.url.path,
-            response.status_code,
+            "HTTP request completed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": duration_ms,
+            },
         )
 
         return response
 
     except Exception:
+        duration_ms = round(
+                    (time.perf_counter() - start_time) * 1000,
+                    2,
+                )
         logger.exception(
-            "HTTP request failed method=%s path=%s",
-            request.method,
-            request.url.path,
+            "HTTP request failed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "duration_ms": duration_ms,
+            },
         )
         raise
 
@@ -226,3 +237,7 @@ def ask_ai(request: AIQuestionRequest):
 @app.get("/health/integrations")
 def integrations_health():
     return get_integrations_health()
+
+@app.get("/metrics")
+def get_application_metrics():
+    return metrics.get_metrics("commerceops-ai")
