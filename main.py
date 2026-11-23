@@ -23,6 +23,13 @@ from integrations.request_context import (
 
 from integrations.logging_config import configure_logging
 from integrations.metrics import metrics
+from integrations import approval_service
+from integrations import execution_service
+
+from schemas import (
+    ApprovalCreateRequest,
+    ApprovalDecisionRequest,
+)
 
 configure_logging("commerceops-ai")
 
@@ -241,3 +248,147 @@ def integrations_health():
 @app.get("/metrics")
 def get_application_metrics():
     return metrics.get_metrics("commerceops-ai")
+
+
+@app.post("/approvals", status_code=201)
+def create_approval(request: ApprovalCreateRequest):
+    try:
+        approval = approval_service.create_approval(
+            action_type=request.action_type,
+            description=request.description,
+            proposed_changes=request.proposed_changes,
+        )
+
+        return approval
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except OSError as exc:
+        logger.exception("Failed to create approval")
+        raise HTTPException(
+            status_code=503,
+            detail="Approval could not be recorded because audit storage is unavailable.",
+        ) from exc
+
+
+@app.get("/approvals/{approval_id}")
+def get_approval(approval_id: str):
+    approval = approval_service.get_approval(approval_id)
+
+    if approval is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Approval not found.",
+        )
+
+    return approval
+
+
+@app.post("/approvals/{approval_id}/decision")
+def decide_approval(
+    approval_id: str,
+    request: ApprovalDecisionRequest,
+):
+    try:
+        return approval_service.decide_approval(
+            approval_id=approval_id,
+            decision=request.decision,
+            decided_by=request.decided_by,
+            role=request.role,
+            comment=request.comment,
+        )
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        ) from exc
+
+    except ValueError as exc:
+        status_code = (
+            404 if str(exc) == "Approval not found" else 400
+        )
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=str(exc),
+        ) from exc
+
+    except OSError as exc:
+        logger.exception("Failed to record approval decision")
+        raise HTTPException(
+            status_code=503,
+            detail="Approval decision could not be recorded because audit storage is unavailable.",
+        ) from exc
+
+
+@app.post("/approvals/{approval_id}/execute")
+def execute_approved_adjustment(approval_id: str):
+    """Execute an approved inventory adjustment."""
+
+    try:
+        return execution_service.execute_approved_inventory_adjustment(
+            approval_id
+        )
+
+    except ValueError as exc:
+        status_code = (
+            404 if str(exc) == "Approval not found" else 400
+        )
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=str(exc),
+        ) from exc
+
+    except RuntimeError as exc:
+        execution = execution_service.get_execution(approval_id)
+
+        logger.exception(
+            "Inventory adjustment execution failed",
+            extra={"approval_id": approval_id},
+        )
+
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "Inventory adjustment execution did not complete. "
+                    "Inspect the execution record and reconcile both systems."
+                ),
+                "execution": execution,
+            },
+        ) from exc
+
+    except OSError as exc:
+        logger.exception(
+            "Inventory execution audit storage failed",
+            extra={"approval_id": approval_id},
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Execution could not be safely recorded because "
+                "audit storage is unavailable."
+            ),
+        ) from exc
+
+
+@app.get("/approvals/{approval_id}/execution")
+def get_approval_execution(approval_id: str):
+    """Retrieve the execution record for an approval."""
+
+    execution = execution_service.get_execution(approval_id)
+
+    if execution is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Execution record not found.",
+        )
+
+    return execution

@@ -312,3 +312,172 @@ def test_agent_refuses_runbook_question_when_no_evidence_found(monkeypatch):
 
     mock_tool.assert_not_called()
     mock_client.chat.assert_not_called()
+
+
+def test_audit_records_runbook_retrieval_failure(monkeypatch):
+    audit_events = []
+
+    monkeypatch.setattr(
+        ai_agent,
+        "record_audit_event",
+        lambda event_type, details=None: audit_events.append(
+            {"event_type": event_type, "details": details or {}}
+        ),
+    )
+
+    def failed_retrieval(question, top_k=3):
+        raise RuntimeError("Runbook retrieval unavailable")
+
+    monkeypatch.setattr(
+        ai_agent,
+        "retrieve_runbooks_semantic",
+        failed_retrieval,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Runbook retrieval unavailable",
+    ):
+        ai_agent.ask_commerceops(
+            "How should I troubleshoot an API timeout?"
+        )
+
+    event_types = [
+        event["event_type"] for event in audit_events
+    ]
+
+    assert event_types == [
+        "ai_request_started",
+        "ai_request_failed",
+    ]
+
+    assert audit_events[-1]["details"]["error_type"] == "RuntimeError"
+
+
+def test_audit_records_inventory_tool_failure(monkeypatch):
+    audit_events = []
+
+    monkeypatch.setattr(
+        ai_agent,
+        "record_audit_event",
+        lambda event_type, details=None: audit_events.append(
+            {"event_type": event_type, "details": details or {}}
+        ),
+    )
+
+    first_response = make_response(
+        tool_calls=[make_tool_call()]
+    )
+
+    mock_client = Mock()
+    mock_client.chat.return_value = first_response
+
+    monkeypatch.setattr(
+        ai_agent.ollama,
+        "Client",
+        Mock(return_value=mock_client),
+    )
+
+    monkeypatch.setattr(
+        ai_agent,
+        "get_inventory_discrepancies",
+        Mock(side_effect=ValueError("Inventory data is invalid")),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Inventory data is invalid",
+    ):
+        ai_agent.ask_commerceops(
+            "Explain the actual stock differences."
+        )
+
+    event_types = [
+        event["event_type"] for event in audit_events
+    ]
+
+    assert event_types == [
+        "ai_request_started",
+        "runbook_retrieval_completed",
+        "tool_execution_started",
+        "tool_execution_failed",
+        "ai_request_failed",
+    ]
+
+    assert audit_events[-2]["details"]["error_type"] == "ValueError"
+    assert audit_events[-1]["details"]["error_type"] == "ValueError"
+
+    # The model must not receive another request after tool failure.
+    assert mock_client.chat.call_count == 1
+
+
+def test_audit_records_successful_inventory_request(monkeypatch):
+    audit_events = []
+
+    monkeypatch.setattr(
+        ai_agent,
+        "record_audit_event",
+        lambda event_type, details=None: audit_events.append(
+            {"event_type": event_type, "details": details or {}}
+        ),
+    )
+
+    first_response = make_response(
+        tool_calls=[make_tool_call()]
+    )
+
+    final_response = make_response(
+        content="SKU-101 has 5 more units online than in ERP."
+    )
+
+    mock_client = Mock()
+    mock_client.chat.side_effect = [
+        first_response,
+        final_response,
+    ]
+
+    monkeypatch.setattr(
+        ai_agent.ollama,
+        "Client",
+        Mock(return_value=mock_client),
+    )
+
+    monkeypatch.setattr(
+        ai_agent,
+        "get_inventory_discrepancies",
+        Mock(
+            return_value={
+                "total_skus": 3,
+                "discrepancy_count": 2,
+                "discrepancies": [],
+            }
+        ),
+    )
+
+    answer = ai_agent.ask_commerceops(
+        "Explain the actual stock differences."
+    )
+
+    event_types = [
+        event["event_type"] for event in audit_events
+    ]
+
+    assert event_types == [
+        "ai_request_started",
+        "runbook_retrieval_completed",
+        "tool_execution_started",
+        "tool_execution_succeeded",
+        "ai_response_completed",
+    ]
+
+    assert "SKU-101" in answer
+
+    assert (
+        audit_events[-1]["details"]["status"]
+        == "success"
+    )
+
+    assert (
+        audit_events[3]["details"]["discrepancy_count"]
+        == 2
+    )

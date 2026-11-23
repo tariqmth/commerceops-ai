@@ -9,6 +9,7 @@ import time
 
 from ai_tools import get_inventory_discrepancies
 from semantic_retrieval import retrieve_runbooks_semantic
+from integrations.audit_log import record_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def is_inventory_question(question: str) -> bool:
     return bool(words & inventory_terms)
 
 
-def ask_commerceops(question: str) -> str:
+def _ask_commerceops(question: str) -> str:
     logger.info("Starting CommerceOps AI request")
 
     retrieval_started = time.perf_counter()
@@ -102,6 +103,21 @@ def ask_commerceops(question: str) -> str:
             item["section"],
             item["score"],
         )
+
+    record_audit_event(
+        "runbook_retrieval_completed",
+        {
+            "result_count": len(runbooks),
+            "sources": [
+                {
+                    "source": item["source"],
+                    "section": item["section"],
+                    "score": item["score"],
+                }
+                for item in runbooks
+            ],
+        },
+    )
 
     if runbooks:
         runbook_context = "\n\n".join(
@@ -206,9 +222,36 @@ def ask_commerceops(question: str) -> str:
                 f"{tool_call.function.name}"
             )
 
-        result = get_inventory_discrepancies()
-
         logger.info("Executing inventory discrepancy tool")
+
+        record_audit_event(
+            "tool_execution_started",
+            {
+                "tool": "get_inventory_discrepancies",
+            },
+        )
+
+        try:
+            result = get_inventory_discrepancies()
+
+        except Exception as exc:
+            record_audit_event(
+                "tool_execution_failed",
+                {
+                    "tool": "get_inventory_discrepancies",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        record_audit_event(
+            "tool_execution_succeeded",
+            {
+                "tool": "get_inventory_discrepancies",
+                "total_skus": result.get("total_skus"),
+                "discrepancy_count": result.get("discrepancy_count"),
+            },
+        )
 
         messages.append(response.message)
         messages.append(
@@ -229,6 +272,46 @@ def ask_commerceops(question: str) -> str:
 
     return final_response.message.content or ""
 
+
+def ask_commerceops(question: str) -> str:
+    """
+    Public AI entry point with audit lifecycle tracking.
+    """
+
+    record_audit_event(
+        "ai_request_started",
+        {
+            "question_type": (
+                "inventory"
+                if is_inventory_question(question)
+                else "operational"
+            ),
+            "question_length": len(question),
+        },
+    )
+
+    try:
+        answer = _ask_commerceops(question)
+
+    except Exception as exc:
+        record_audit_event(
+            "ai_request_failed",
+            {
+                "error_type": type(exc).__name__,
+            },
+        )
+        raise
+
+    record_audit_event(
+        "ai_response_completed",
+        {
+            "status": "success",
+            "response_generated": bool(answer),
+            "response_length": len(answer),
+        },
+    )
+
+    return answer
 
 if __name__ == "__main__":
     question = (

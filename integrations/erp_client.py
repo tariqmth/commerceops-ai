@@ -23,3 +23,31 @@ def fetch_erp_inventory(
 )
 
     return validate_inventory_payload(payload)
+
+def update_erp_inventory(
+    sku: str,
+    quantity: int,
+    base_url: str = "http://127.0.0.1:8002",
+) -> dict:
+    """Update inventory in the ERP mock API."""
+
+    import httpx
+
+    from integrations.request_context import request_id_var
+
+    if not isinstance(sku, str) or not sku.strip():
+        raise ValueError("SKU cannot be empty")
+
+    if type(quantity) is not int or quantity < 0:
+        raise ValueError("Quantity must be a non-negative integer")
+
+    response = httpx.put(
+        f"{base_url}/inventory/{sku}",
+        json={"quantity": quantity},
+        headers={"X-Request-ID": request_id_var.get()},
+        timeout=10,
+    )
+
+    response.raise_for_status()
+
+    return response.json()

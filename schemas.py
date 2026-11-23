@@ -25,3 +25,20 @@ class InventoryComparisonRequest(BaseModel):
 
 class AIQuestionRequest(BaseModel):
     question: str = Field(min_length=1)
+
+class ApprovalCreateRequest(BaseModel):
+    action_type: Literal[
+        "inventory_adjustment",
+        "order_cancellation",
+        "refund",
+    ]
+
+    description: str = Field(min_length=1)
+    proposed_changes: dict = Field(min_length=1)
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    decided_by: str = Field(min_length=1)
+    role: str = Field(min_length=1)
+    comment: str = ""
