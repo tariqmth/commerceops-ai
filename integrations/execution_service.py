@@ -129,6 +129,9 @@ def execute_approved_inventory_adjustment(
             "failure_message": None,
             "observed_quantities": None,
             "reconciliation_error": None,
+            "recovery_attempts": 0,
+            "recovered_at": None,
+            "last_recovery_error": None,
         }
 
         # Audit before any inventory changes.

@@ -392,3 +392,60 @@ def get_approval_execution(approval_id: str):
         )
 
     return execution
+\
+@app.post("/approvals/{approval_id}/recover")
+def recover_approved_adjustment(approval_id: str):
+    """Recover a partially completed inventory adjustment."""
+
+    # Check that an execution record exists.
+    execution = execution_service.get_execution(approval_id)
+
+    if execution is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Execution record not found.",
+        )
+
+    try:
+        return execution_service.recover_partial_inventory_execution(
+            approval_id
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
+
+    except RuntimeError as exc:
+        execution = execution_service.get_execution(approval_id)
+
+        logger.exception(
+            "Inventory execution recovery failed",
+            extra={"approval_id": approval_id},
+        )
+
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "Inventory recovery did not complete. "
+                    "Inspect the execution record and reconcile both systems."
+                ),
+                "execution": execution,
+            },
+        ) from exc
+
+    except OSError as exc:
+        logger.exception(
+            "Inventory recovery audit storage failed",
+            extra={"approval_id": approval_id},
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Recovery could not be safely recorded because "
+                "audit storage is unavailable."
+            ),
+        ) from exc

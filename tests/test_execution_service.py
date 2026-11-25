@@ -6,10 +6,11 @@ from integrations import execution_service
 
 @pytest.fixture(autouse=True)
 def clear_executions():
-    """Keep execution records isolated between tests."""
+    """Keep execution and recovery records isolated between tests."""
 
     with execution_service._execution_lock:
         execution_service._EXECUTIONS.clear()
+        execution_service._RECOVERING.clear()
 
 
 @pytest.fixture
@@ -34,7 +35,11 @@ def approved_adjustment(monkeypatch):
     monkeypatch.setattr(
         execution_service.approval_service,
         "get_approval",
-        lambda approval_id: approval if approval_id == approval["approval_id"] else None,
+        lambda approval_id: (
+            approval
+            if approval_id == approval["approval_id"]
+            else None
+        ),
     )
 
     return approval
@@ -46,7 +51,7 @@ def test_successful_inventory_execution(
 ):
     """Both systems update and verification succeeds."""
 
-    inventory = {
+    online_inventory = {
         "SKU-101": {
             "product_name": "Wireless Mouse",
             "quantity": 20,
@@ -63,7 +68,7 @@ def test_successful_inventory_execution(
     monkeypatch.setattr(
         execution_service,
         "fetch_online_inventory",
-        lambda: inventory,
+        lambda: online_inventory,
     )
 
     monkeypatch.setattr(
@@ -73,7 +78,7 @@ def test_successful_inventory_execution(
     )
 
     def update_online(sku, quantity):
-        inventory[sku]["quantity"] = quantity
+        online_inventory[sku]["quantity"] = quantity
 
         return {
             "sku": sku,
@@ -115,8 +120,86 @@ def test_successful_inventory_execution(
     assert result["status"] == "completed"
     assert result["updated_services"] == ["online_store", "erp"]
 
-    assert inventory["SKU-101"]["quantity"] == 18
+    assert online_inventory["SKU-101"]["quantity"] == 18
     assert erp_inventory["SKU-101"]["quantity"] == 18
+
+
+def test_new_execution_has_default_recovery_metadata(
+    monkeypatch,
+    approved_adjustment,
+):
+    """A new execution starts with clean recovery metadata."""
+
+    online_inventory = {
+        "SKU-101": {
+            "product_name": "Wireless Mouse",
+            "quantity": 20,
+        }
+    }
+
+    erp_inventory = {
+        "SKU-101": {
+            "product_name": "Wireless Mouse",
+            "quantity": 15,
+        }
+    }
+
+    monkeypatch.setattr(
+        execution_service,
+        "fetch_online_inventory",
+        lambda: online_inventory,
+    )
+
+    monkeypatch.setattr(
+        execution_service,
+        "fetch_erp_inventory",
+        lambda: erp_inventory,
+    )
+
+    def update_online(sku, quantity):
+        online_inventory[sku]["quantity"] = quantity
+
+        return {
+            "sku": sku,
+            "new_quantity": quantity,
+            "status": "updated",
+        }
+
+    def update_erp(sku, quantity):
+        erp_inventory[sku]["quantity"] = quantity
+
+        return {
+            "sku": sku,
+            "new_quantity": quantity,
+            "status": "updated",
+        }
+
+    monkeypatch.setattr(
+        execution_service,
+        "update_online_inventory",
+        update_online,
+    )
+
+    monkeypatch.setattr(
+        execution_service,
+        "update_erp_inventory",
+        update_erp,
+    )
+
+    monkeypatch.setattr(
+        execution_service,
+        "record_audit_event",
+        lambda *args, **kwargs: None,
+    )
+
+    result = execution_service.execute_approved_inventory_adjustment(
+        "approval-test-001"
+    )
+
+    assert result["status"] == "completed"
+    assert result["recovery_attempts"] == 0
+    assert result["recovered_at"] is None
+    assert result["last_recovery_error"] is None
 
 
 def test_pending_approval_cannot_execute(
@@ -343,6 +426,7 @@ def test_erp_failure_records_partial_failure(
 
     assert inventory["SKU-101"]["quantity"] == 18
 
+
 def test_online_store_failure_records_failed_execution(
     monkeypatch,
     approved_adjustment,
@@ -353,14 +437,21 @@ def test_online_store_failure_records_failed_execution(
         execution_service,
         "fetch_online_inventory",
         lambda: {
-            "SKU-101": {"product_name": "Wireless Mouse", "quantity": 20}
+            "SKU-101": {
+                "product_name": "Wireless Mouse",
+                "quantity": 20,
+            }
         },
     )
+
     monkeypatch.setattr(
         execution_service,
         "fetch_erp_inventory",
         lambda: {
-            "SKU-101": {"product_name": "Wireless Mouse", "quantity": 15}
+            "SKU-101": {
+                "product_name": "Wireless Mouse",
+                "quantity": 15,
+            }
         },
     )
 
@@ -368,16 +459,25 @@ def test_online_store_failure_records_failed_execution(
         raise RuntimeError("Simulated Online Store failure")
 
     def unexpected_erp_update(sku, quantity):
-        pytest.fail("ERP must not be updated after Online Store failure")
+        pytest.fail(
+            "ERP must not be updated after Online Store failure"
+        )
 
     monkeypatch.setattr(
-        execution_service, "update_online_inventory", fail_online_update
+        execution_service,
+        "update_online_inventory",
+        fail_online_update,
     )
+
     monkeypatch.setattr(
-        execution_service, "update_erp_inventory", unexpected_erp_update
+        execution_service,
+        "update_erp_inventory",
+        unexpected_erp_update,
     )
+
     monkeypatch.setattr(
-        execution_service, "record_audit_event",
+        execution_service,
+        "record_audit_event",
         lambda *args, **kwargs: None,
     )
 
@@ -399,10 +499,17 @@ def test_final_verification_failure_records_partial_failure(
     """A wrong final ERP quantity must prevent successful completion."""
 
     online_inventory = {
-        "SKU-101": {"product_name": "Wireless Mouse", "quantity": 20}
+        "SKU-101": {
+            "product_name": "Wireless Mouse",
+            "quantity": 20,
+        }
     }
+
     erp_inventory = {
-        "SKU-101": {"product_name": "Wireless Mouse", "quantity": 15}
+        "SKU-101": {
+            "product_name": "Wireless Mouse",
+            "quantity": 15,
+        }
     }
 
     erp_fetch_count = 0
@@ -415,33 +522,57 @@ def test_final_verification_failure_records_partial_failure(
             return erp_inventory
 
         return {
-            "SKU-101": {"product_name": "Wireless Mouse", "quantity": 17}
+            "SKU-101": {
+                "product_name": "Wireless Mouse",
+                "quantity": 17,
+            }
         }
 
     monkeypatch.setattr(
-        execution_service, "fetch_online_inventory",
+        execution_service,
+        "fetch_online_inventory",
         lambda: online_inventory,
     )
+
     monkeypatch.setattr(
-        execution_service, "fetch_erp_inventory", fetch_erp,
+        execution_service,
+        "fetch_erp_inventory",
+        fetch_erp,
     )
 
     def update_online(sku, quantity):
         online_inventory[sku]["quantity"] = quantity
-        return {"sku": sku, "new_quantity": quantity, "status": "updated"}
+
+        return {
+            "sku": sku,
+            "new_quantity": quantity,
+            "status": "updated",
+        }
 
     def update_erp(sku, quantity):
         erp_inventory[sku]["quantity"] = quantity
-        return {"sku": sku, "new_quantity": quantity, "status": "updated"}
+
+        return {
+            "sku": sku,
+            "new_quantity": quantity,
+            "status": "updated",
+        }
 
     monkeypatch.setattr(
-        execution_service, "update_online_inventory", update_online,
+        execution_service,
+        "update_online_inventory",
+        update_online,
     )
+
     monkeypatch.setattr(
-        execution_service, "update_erp_inventory", update_erp,
+        execution_service,
+        "update_erp_inventory",
+        update_erp,
     )
+
     monkeypatch.setattr(
-        execution_service, "record_audit_event",
+        execution_service,
+        "record_audit_event",
         lambda *args, **kwargs: None,
     )
 
@@ -467,7 +598,9 @@ def test_initial_audit_failure_prevents_execution(
         raise OSError("Simulated audit storage failure")
 
     monkeypatch.setattr(
-        execution_service, "record_audit_event", fail_audit,
+        execution_service,
+        "record_audit_event",
+        fail_audit,
     )
 
     with pytest.raises(OSError, match="audit storage failure"):
@@ -534,15 +667,20 @@ def test_missing_sku_prevents_execution(
     )
 
     monkeypatch.setattr(
-        execution_service, "fetch_online_inventory",
+        execution_service,
+        "fetch_online_inventory",
         lambda: online_inventory,
     )
+
     monkeypatch.setattr(
-        execution_service, "fetch_erp_inventory",
+        execution_service,
+        "fetch_erp_inventory",
         lambda: erp_inventory,
     )
+
     monkeypatch.setattr(
-        execution_service, "record_audit_event",
+        execution_service,
+        "record_audit_event",
         lambda *args, **kwargs: None,
     )
 
@@ -632,7 +770,6 @@ def test_online_update_succeeds_but_response_is_lost(
 
     assert online_inventory["SKU-101"]["quantity"] == 18
     assert erp_inventory["SKU-101"]["quantity"] == 15
-
 
 
 def test_erp_update_succeeds_but_response_is_lost(
@@ -1041,10 +1178,7 @@ def test_recovery_rejects_concurrent_attempt_for_same_approval(
         )
 
     # The existing recovery attempt must remain untouched.
-    assert (
-        "approval-test-001"
-        in execution_service._RECOVERING
-    )
+    assert "approval-test-001" in execution_service._RECOVERING
 
     result = execution_service.get_execution("approval-test-001")
 
